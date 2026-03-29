@@ -38,13 +38,18 @@ def create_http_app(bot: SlackDualAgentBot, settings: Settings) -> FastAPI:
                 processed_event_ids.pop()
 
         event = data.get("event", {})
-        if event.get("bot_id"):
+        if event.get("bot_id") or event.get("subtype"):
             return {"ok": True}
 
+        channel = event.get("channel")
+        thread_ts = event.get("thread_ts") or event.get("ts")
+        text = event.get("text", "")
+
         if event.get("type") == "app_mention":
-            channel = event.get("channel")
-            thread_ts = event.get("thread_ts") or event.get("ts")
-            text = event.get("text", "")
+            background_tasks.add_task(bot.handle_mention, channel, thread_ts, text)
+            return {"ok": True}
+
+        if event.get("type") == "message" and event.get("thread_ts") and bot.should_reply_in_thread(channel, thread_ts):
             background_tasks.add_task(bot.handle_mention, channel, thread_ts, text)
 
         return {"ok": True}

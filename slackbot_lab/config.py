@@ -18,6 +18,7 @@ class Settings:
     research_model: str = "gpt-4.1"
     manager_model: str = "gpt-4.1-mini"
     smalltalk_model: str = "gpt-4.1-mini"
+    memory_db_path: str = "data/conversation_memory.db"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -52,4 +53,5 @@ class Settings:
             research_model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-4.1").strip(),
             manager_model=os.getenv("OPENAI_MANAGER_MODEL", "gpt-4.1-mini").strip(),
             smalltalk_model=os.getenv("OPENAI_SMALLTALK_MODEL", "gpt-4.1-mini").strip(),
+            memory_db_path=os.getenv("MEMORY_DB_PATH", "data/conversation_memory.db").strip(),
         )

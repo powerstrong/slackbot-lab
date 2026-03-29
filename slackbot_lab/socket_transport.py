@@ -25,14 +25,20 @@ def run_socket_mode(bot: SlackDualAgentBot, settings: Settings) -> None:
         payload = request.payload or {}
         event = payload.get("event", {})
 
-        if event.get("bot_id"):
+        if event.get("bot_id") or event.get("subtype"):
             return
 
-        if event.get("type") == "app_mention":
-            channel = event.get("channel")
-            thread_ts = event.get("thread_ts") or event.get("ts")
-            text = event.get("text", "")
+        channel = event.get("channel")
+        thread_ts = event.get("thread_ts") or event.get("ts")
+        text = event.get("text", "")
 
+        should_handle = False
+        if event.get("type") == "app_mention":
+            should_handle = True
+        elif event.get("type") == "message" and event.get("thread_ts") and bot.should_reply_in_thread(channel, thread_ts):
+            should_handle = True
+
+        if should_handle:
             worker = threading.Thread(
                 target=bot.handle_mention,
                 args=(channel, thread_ts, text),
