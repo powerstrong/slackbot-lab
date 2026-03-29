@@ -33,7 +33,6 @@ def run_socket_mode(bot: SlackDualAgentBot, settings: Settings) -> None:
             thread_ts = event.get("thread_ts") or event.get("ts")
             text = event.get("text", "")
 
-            bot.post_ack(channel)
             worker = threading.Thread(
                 target=bot.handle_mention,
                 args=(channel, thread_ts, text),

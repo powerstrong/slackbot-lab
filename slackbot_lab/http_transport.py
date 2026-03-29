@@ -45,8 +45,6 @@ def create_http_app(bot: SlackDualAgentBot, settings: Settings) -> FastAPI:
             channel = event.get("channel")
             thread_ts = event.get("thread_ts") or event.get("ts")
             text = event.get("text", "")
-
-            bot.post_ack(channel)
             background_tasks.add_task(bot.handle_mention, channel, thread_ts, text)
 
         return {"ok": True}
