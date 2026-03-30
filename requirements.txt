@@ -1,5 +1,4 @@
-fastapi
+flask
 httpx
 python-dotenv
 slack-sdk
-uvicorn

@@ -12,6 +12,4 @@ if __name__ == "__main__":
     if settings.transport == "socket":
         run_socket_mode(bot, settings)
     else:
-        import uvicorn
-
-        uvicorn.run("main:app", host=settings.host, port=settings.port, reload=False)
+        app.run(host=settings.host, port=settings.port)
