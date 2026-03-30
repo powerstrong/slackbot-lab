@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Iterable
 
@@ -34,72 +35,89 @@ class SlackDualAgentBot:
                 self.memory.add(memory_key, "슬랙봇", reply[:1500])
                 return
 
-            complexity = self._classify_complexity(cleaned_text)
+            plan = self._plan_conversation(cleaned_text, memory_context)
+            lead = plan.get("lead", "kim")
+            rounds = max(1, min(2, int(plan.get("rounds", 1))))
 
-            if self._route_speaker(cleaned_text) == "park":
-                park_opening = self._ask_park_opening(cleaned_text, memory_context=memory_context)
+            kim_turns: list[str] = []
+            park_turns: list[str] = []
+
+            if lead == "park":
+                park_opening = self._ask_persona(
+                    persona="park",
+                    phase="opening",
+                    user_request=cleaned_text,
+                    memory_context=memory_context,
+                )
                 self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_opening)
                 self.memory.add(memory_key, "박과장", park_opening)
+                park_turns.append(park_opening)
 
-                if complexity == "simple":
-                    park_final = self._ask_park_final(
-                        cleaned_text,
-                        park_opening=park_opening,
-                        kim_review="",
+                if rounds >= 2:
+                    kim_reply = self._ask_persona(
+                        persona="kim",
+                        phase="response",
+                        user_request=cleaned_text,
                         memory_context=self.memory.render_context(memory_key),
+                        partner_messages=park_turns,
                     )
-                    self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_final)
-                    self.memory.add(memory_key, "박과장", park_final)
-                    return
+                    if self._has_meaningful_content(kim_reply):
+                        self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_reply)
+                        self.memory.add(memory_key, "김대리", kim_reply)
+                        kim_turns.append(kim_reply)
 
-                kim_review = self._ask_kim_review(
-                    cleaned_text,
-                    park_opening,
+                park_final = self._ask_persona(
+                    persona="park",
+                    phase="final",
+                    user_request=cleaned_text,
                     memory_context=self.memory.render_context(memory_key),
-                )
-                if self._has_substance(kim_review):
-                    self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_review)
-                    self.memory.add(memory_key, "김대리", kim_review)
-
-                park_final = self._ask_park_final(
-                    cleaned_text,
-                    park_opening=park_opening,
-                    kim_review=kim_review,
-                    memory_context=self.memory.render_context(memory_key),
+                    partner_messages=kim_turns or park_turns,
                 )
                 self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_final)
                 self.memory.add(memory_key, "박과장", park_final)
                 return
 
-            kim_research = self._ask_kim_research(cleaned_text, memory_context=memory_context)
-            self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_research)
-            self.memory.add(memory_key, "김대리", kim_research)
-
-            park_review = self._ask_park_review(
-                cleaned_text,
-                kim_research,
-                memory_context=self.memory.render_context(memory_key),
+            kim_opening = self._ask_persona(
+                persona="kim",
+                phase="opening",
+                user_request=cleaned_text,
+                memory_context=memory_context,
             )
-            self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_review)
-            self.memory.add(memory_key, "박과장", park_review)
+            self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_opening)
+            self.memory.add(memory_key, "김대리", kim_opening)
+            kim_turns.append(kim_opening)
 
-            kim_reply = ""
-            if complexity == "complex":
-                kim_reply = self._ask_kim_reply(
-                    cleaned_text,
-                    kim_research=kim_research,
-                    park_review=park_review,
+            park_reply = self._ask_persona(
+                persona="park",
+                phase="response",
+                user_request=cleaned_text,
+                memory_context=self.memory.render_context(memory_key),
+                partner_messages=kim_turns,
+            )
+            if self._has_meaningful_content(park_reply):
+                self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_reply)
+                self.memory.add(memory_key, "박과장", park_reply)
+                park_turns.append(park_reply)
+
+            if rounds >= 2:
+                kim_reply = self._ask_persona(
+                    persona="kim",
+                    phase="response",
+                    user_request=cleaned_text,
                     memory_context=self.memory.render_context(memory_key),
+                    partner_messages=park_turns or kim_turns,
                 )
-                if self._has_substance(kim_reply):
+                if self._has_meaningful_content(kim_reply):
                     self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_reply)
                     self.memory.add(memory_key, "김대리", kim_reply)
+                    kim_turns.append(kim_reply)
 
-            park_final = self._ask_park_final(
-                cleaned_text,
-                park_opening=park_review,
-                kim_review=kim_reply,
+            park_final = self._ask_persona(
+                persona="park",
+                phase="final",
+                user_request=cleaned_text,
                 memory_context=self.memory.render_context(memory_key),
+                partner_messages=kim_turns or park_turns,
             )
             self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_final)
             self.memory.add(memory_key, "박과장", park_final)
@@ -114,70 +132,6 @@ class SlackDualAgentBot:
         lowered = text.lower()
         keywords = ["안녕", "반가", "hello", "hi", "고마", "thanks", "이름", "뭐해"]
         return any(keyword in lowered for keyword in keywords) and len(lowered) < 30
-
-    def _route_speaker(self, text: str) -> str:
-        lowered = text.lower()
-        park_keywords = [
-            "어떻게",
-            "해야",
-            "할까",
-            "결론",
-            "추천",
-            "우선순위",
-            "판단",
-            "실행",
-            "전략",
-            "정리",
-            "plan",
-            "strategy",
-            "recommend",
-        ]
-        kim_keywords = [
-            "찾아",
-            "조사",
-            "비교",
-            "뉴스",
-            "동향",
-            "자료",
-            "근거",
-            "출처",
-            "검색",
-            "research",
-            "compare",
-            "source",
-        ]
-
-        park_score = sum(keyword in lowered for keyword in park_keywords)
-        kim_score = sum(keyword in lowered for keyword in kim_keywords)
-        return "park" if park_score > kim_score else "kim"
-
-    def _classify_complexity(self, text: str) -> str:
-        lowered = text.lower()
-        complex_signals = [
-            "비교",
-            "전략",
-            "정리",
-            "분석",
-            "추천",
-            "근거",
-            "리스크",
-            "장단점",
-            "검토",
-            "여러",
-            "복수",
-            "비용",
-            "일정",
-            "뉴스",
-            "동향",
-            "plan",
-            "strategy",
-            "compare",
-            "analysis",
-        ]
-        score = sum(signal in lowered for signal in complex_signals)
-        if len(text) > 80 or score >= 2:
-            return "complex"
-        return "simple"
 
     def _smalltalk_reply(self, text: str, memory_context: str) -> str:
         context_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
@@ -194,165 +148,99 @@ class SlackDualAgentBot:
         )
         return self._to_slack_text(response)
 
-    def _ask_kim_research(self, text: str, memory_context: str | None = None) -> str:
-        memory_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
+    def _plan_conversation(self, user_request: str, memory_context: str) -> dict:
+        context_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
         response = self.openai_client.create(
-            model=self.settings.research_model,
-            tools=[{"type": "web_search"}],
+            model=self.settings.manager_model,
             input_text=f"""
+너는 슬랙 업무 에이전트의 대화 설계자다.
+아래 사용자 요청을 보고 누가 먼저 답하면 좋은지, 몇 번 정도 주고받아야 하는지 판단한다.
+김대리는 조사와 근거 정리에 강하고, 박과장은 판단과 최종 정리에 강하다.
+간단한 요청이면 왕복을 최소화하고, 복잡한 요청이면 한 번 더 주고받게 한다.
+다른 설명 없이 JSON만 출력한다.
+
+출력 형식:
+{{"lead":"kim" 또는 "park","rounds":1 또는 2}}
+{context_block}
+
+주성님 요청:
+{user_request}
+""",
+        )
+
+        try:
+            start = response.find("{")
+            end = response.rfind("}")
+            if start != -1 and end != -1:
+                parsed = json.loads(response[start:end + 1])
+                lead = parsed.get("lead", "kim")
+                rounds = parsed.get("rounds", 1)
+                if lead in {"kim", "park"} and rounds in {1, 2}:
+                    return {"lead": lead, "rounds": rounds}
+        except Exception:
+            pass
+
+        return {"lead": "kim", "rounds": 1}
+
+    def _ask_persona(
+        self,
+        persona: str,
+        phase: str,
+        user_request: str,
+        memory_context: str,
+        partner_messages: list[str] | None = None,
+    ) -> str:
+        partner_messages = partner_messages or []
+        context_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
+        partner_block = ""
+        if partner_messages:
+            joined = "\n\n".join(partner_messages)
+            partner_block = f"\n상대의 직전 메시지 또는 참고 내용:\n{joined}\n"
+
+        if persona == "kim":
+            instructions = """
 너는 김대리다.
 박과장과는 상호 존대한다.
-주성님의 요청에 대해 사실관계, 최신 근거, 비교 포인트, 주의사항을 조사해서 정리한다.
+역할은 사실관계, 최신 근거, 비교 포인트, 주의사항을 조사해서 정리하는 것이다.
+필요하면 웹 검색을 사용한다.
+말투는 차분하고 사람처럼 자연스럽게 한다.
+정해진 문구를 반복하지 말고, 상황에 맞게 실제로 할 말을 한다.
+학습된 챗봇처럼 틀에 박힌 표현은 피한다.
+시간 정보는 근거가 있을 때만 구체적인 날짜로 말한다.
+"""
+            tools = [{"type": "web_search"}]
+        else:
+            instructions = """
+너는 박과장이다.
+김대리와는 상호 존대한다.
+역할은 실무 판단, 우선순위, 추천안, 최종 결론을 명확하게 정리하는 것이다.
+말투는 자연스럽고 단정하게 한다.
+정해진 문구를 반복하지 말고, 상황에 맞게 실제로 할 말을 한다.
+학습된 챗봇처럼 틀에 박힌 표현은 피한다.
+김대리의 근거나 스레드 맥락이 있으면 그 위에서 판단한다.
+"""
+            tools = None
+
+        phase_instruction = {
+            "opening": "첫 답변이다. 바로 본론으로 들어가고, 필요한 관점이나 핵심 포인트를 제시한다.",
+            "response": "상대가 말한 내용을 받아 자연스럽게 이어서 보완하거나 반박하거나 уточ명한다. 억지로 길게 쓰지 말고 필요한 만큼만 말한다.",
+            "final": "반드시 대화를 마무리하는 최종 답변이다. 결론을 분명하게 말하고, 필요하면 근거와 권장 조치를 함께 정리한다.",
+        }[phase]
+
+        response = self.openai_client.create(
+            model=self.settings.research_model if persona == "kim" else self.settings.manager_model,
+            tools=tools,
+            input_text=f"""
+{instructions}
 다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드에서 오간 대화만 이어받는다.
 한국어로 답한다.
-차분하고 실무적인 말투를 유지한다.
 마크다운 표는 쓰지 말고, 표가 필요하면 bullet list로 풀어서 쓴다.
-시의성이 있는 정보는 가능하면 구체적인 날짜를 적는다.
-바로 본론으로 답한다.{memory_block}
+과한 형식 문구나 인사말은 넣지 말고, 사람처럼 자연스럽게 바로 답한다.
+{phase_instruction}
+{context_block}{partner_block}
 
 주성님 요청:
-{text}
-""",
-        )
-        return self._to_slack_text(response)
-
-    def _ask_park_review(self, text: str, kim_research: str, memory_context: str | None = None) -> str:
-        memory_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
-        response = self.openai_client.create(
-            model=self.settings.manager_model,
-            input_text=f"""
-너는 박과장이다.
-김대리와는 상호 존대한다.
-방금 받은 김대리 자료를 검토해서 실무 판단, 빠진 점, 우선순위를 짚는다.
-간단한 작업이면 짧고 분명하게 말하고, 복잡한 작업이면 김대리가 더 보완해야 할 지점을 남긴다.
-시간 정보는 김대리 자료에 있는 최신 근거만 사용한다. 근거 없이 학습시점 표현을 쓰지 마라.
-다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드 대화만 이어받는다.
-한국어로 간결하게 답한다.
-바로 본론으로 답한다.{memory_block}
-
-주성님 요청:
-{text}
-
-김대리 자료:
-{kim_research}
-""",
-        )
-        return self._to_slack_text(response)
-
-    def _ask_kim_reply(
-        self,
-        text: str,
-        kim_research: str,
-        park_review: str,
-        memory_context: str | None = None,
-    ) -> str:
-        memory_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
-        response = self.openai_client.create(
-            model=self.settings.research_model,
-            tools=[{"type": "web_search"}],
-            input_text=f"""
-너는 김대리다.
-박과장과는 상호 존대한다.
-박과장 검토를 반영해 필요한 근거만 추가 보완한다.
-새로운 정보, 날짜, 근거가 없으면 억지로 길게 쓰지 말고 핵심 보완만 짧게 쓴다.
-시간 정보는 웹 검색이나 이미 주어진 근거를 바탕으로만 적는다.
-다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드 대화만 이어받는다.
-한국어로 답한다.
-바로 본론으로 답한다.{memory_block}
-
-주성님 요청:
-{text}
-
-기존 김대리 자료:
-{kim_research}
-
-박과장 검토:
-{park_review}
-""",
-        )
-        return self._to_slack_text(response)
-
-    def _ask_park_opening(self, text: str, memory_context: str | None = None) -> str:
-        memory_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
-        response = self.openai_client.create(
-            model=self.settings.manager_model,
-            input_text=f"""
-너는 박과장이다.
-김대리와는 상호 존대한다.
-먼저 실무 판단의 방향과 핵심 쟁점을 짚는다.
-간단한 작업이면 짧게 방향만 말해도 된다.
-복잡한 작업이면 김대리가 보완해야 할 근거나 확인 포인트를 남긴다.
-시간 정보는 근거 없이 단정하지 말고, 학습시점 표현도 쓰지 마라.
-다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드 대화만 이어받는다.
-한국어로 답한다.
-바로 본론으로 답한다.{memory_block}
-
-주성님 요청:
-{text}
-""",
-        )
-        return self._to_slack_text(response)
-
-    def _ask_kim_review(self, text: str, park_opening: str, memory_context: str | None = None) -> str:
-        memory_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
-        response = self.openai_client.create(
-            model=self.settings.research_model,
-            tools=[{"type": "web_search"}],
-            input_text=f"""
-너는 김대리다.
-박과장과는 상호 존대한다.
-박과장이 짚은 쟁점에 맞춰 최신 근거와 보완사항만 정리한다.
-시간 정보는 웹 검색이나 주어진 근거에 있는 것만 사용한다.
-근거 없이 학습시점 표현은 쓰지 마라.
-다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드 대화만 이어받는다.
-한국어로 답한다.
-바로 본론으로 답한다.{memory_block}
-
-주성님 요청:
-{text}
-
-박과장 의견:
-{park_opening}
-""",
-        )
-        return self._to_slack_text(response)
-
-    def _ask_park_final(
-        self,
-        text: str,
-        park_opening: str,
-        kim_review: str,
-        memory_context: str | None = None,
-    ) -> str:
-        memory_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
-        response = self.openai_client.create(
-            model=self.settings.manager_model,
-            input_text=f"""
-너는 박과장이다.
-김대리와는 상호 존대한다.
-반드시 최종안을 명확하게 정리해서 끝낸다.
-간단한 작업이면 짧아도 되지만 결론은 분명해야 한다.
-복잡한 작업이면 아래 구조를 최대한 따른다.
-최종안
-결론: 한두 문장
-근거: 핵심 근거 2~4개
-권장 조치: 바로 해야 할 행동 1~3개
-주의사항: 있으면 짧게
-
-시간 정보는 김대리 자료나 스레드 내 최신 근거만 사용한다.
-근거 없이 학습시점 표현을 쓰지 마라.
-다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드 대화만 이어받는다.
-한국어로 간결하고 분명하게 쓴다.
-바로 본론으로 답한다.{memory_block}
-
-주성님 요청:
-{text}
-
-박과장 이전 의견:
-{park_opening}
-
-김대리 보완:
-{kim_review}
+{user_request}
 """,
         )
         return self._to_slack_text(response)
@@ -421,15 +309,9 @@ class SlackDualAgentBot:
     def _parse_table_row(self, line: str) -> list[str]:
         return [cell.strip() for cell in line.strip("|").split("|")]
 
-    def _has_substance(self, text: str) -> bool:
+    def _has_meaningful_content(self, text: str) -> bool:
         normalized = re.sub(r"\s+", " ", text).strip()
-        weak_patterns = [
-            "알겠습니다",
-            "참고하겠습니다",
-            "보완하겠습니다",
-            "검토하겠습니다",
-        ]
-        return len(normalized) >= 30 and not any(normalized == pattern for pattern in weak_patterns)
+        return len(normalized) >= 20
 
     def _post_message(self, channel: str, thread_ts: str, text: str) -> None:
         self.slack_client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
