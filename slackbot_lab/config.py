@@ -14,7 +14,7 @@ class Settings:
     slack_signing_secret: str | None = None
     slack_app_token: str | None = None
     host: str = "0.0.0.0"
-    port: int = 3000
+    port: int = 3002
     research_model: str = "gpt-5.2"
     manager_model: str = "gpt-5.2"
     smalltalk_model: str = "gpt-5-mini"
@@ -49,7 +49,7 @@ class Settings:
             slack_signing_secret=slack_signing_secret,
             slack_app_token=slack_app_token,
             host=os.getenv("HOST", "0.0.0.0").strip(),
-            port=int(os.getenv("PORT", "3000").strip()),
+            port=int(os.getenv("PORT", "3002").strip()),
             research_model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.2").strip(),
             manager_model=os.getenv("OPENAI_MANAGER_MODEL", "gpt-5.2").strip(),
             smalltalk_model=os.getenv("OPENAI_SMALLTALK_MODEL", "gpt-5-mini").strip(),
