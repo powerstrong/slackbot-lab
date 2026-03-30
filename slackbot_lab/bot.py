@@ -9,6 +9,13 @@ from slackbot_lab.memory import ConversationMemory
 from slackbot_lab.openai_client import OpenAIResponsesClient
 
 
+USER_NAME = "주성님"
+KIM_NAME = "김대리"
+PARK_NAME = "박과장"
+KIM_LABEL = ":male-technologist: 김대리"
+PARK_LABEL = ":male-office-worker: 박과장"
+
+
 class SlackDualAgentBot:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -27,20 +34,64 @@ class SlackDualAgentBot:
         memory_context = self.memory.render_context(memory_key)
 
         try:
-            self.memory.add(memory_key, "주성님", cleaned_text)
+            self.memory.add(memory_key, USER_NAME, cleaned_text)
 
             if self._is_smalltalk(cleaned_text):
                 reply = self._smalltalk_reply(cleaned_text, memory_context)
                 self._post_message(channel, thread_ts, reply[:1500])
-                self.memory.add(memory_key, "슬랙봇", reply[:1500])
+                self.memory.add(memory_key, PARK_NAME, reply[:1500])
                 return
 
             plan = self._plan_conversation(cleaned_text, memory_context)
-            lead = plan.get("lead", "kim")
-            rounds = max(1, min(2, int(plan.get("rounds", 1))))
+            if plan.get("need_clarification"):
+                question = self._trim_response(plan.get("clarification_question", "확인이 필요한 내용이 있습니다. 한 번만 더 알려주시겠습니까?"))
+                self._post_chunks(channel, thread_ts, PARK_LABEL, question)
+                self.memory.add(memory_key, PARK_NAME, question)
+                return
+
+            lead = plan.get("lead", "park")
+            complexity = plan.get("complexity", "simple")
 
             kim_turns: list[str] = []
             park_turns: list[str] = []
+
+            if complexity == "simple":
+                if lead == "kim":
+                    kim_answer = self._ask_persona(
+                        persona="kim",
+                        phase="answer",
+                        user_request=cleaned_text,
+                        memory_context=memory_context,
+                    )
+                    kim_answer = self._trim_response(kim_answer)
+                    if self._has_meaningful_content(kim_answer):
+                        self._post_chunks(channel, thread_ts, KIM_LABEL, kim_answer)
+                        self.memory.add(memory_key, KIM_NAME, kim_answer)
+                        kim_turns.append(kim_answer)
+
+                    park_final = self._ask_persona(
+                        persona="park",
+                        phase="final",
+                        user_request=cleaned_text,
+                        memory_context=self.memory.render_context(memory_key),
+                        partner_messages=kim_turns,
+                    )
+                    park_final = self._trim_response(park_final)
+                    if self._has_meaningful_content(park_final) and not self._is_redundant(park_final, kim_turns):
+                        self._post_chunks(channel, thread_ts, PARK_LABEL, park_final)
+                        self.memory.add(memory_key, PARK_NAME, park_final)
+                    return
+
+                park_final = self._ask_persona(
+                    persona="park",
+                    phase="final",
+                    user_request=cleaned_text,
+                    memory_context=memory_context,
+                )
+                park_final = self._trim_response(park_final)
+                self._post_chunks(channel, thread_ts, PARK_LABEL, park_final)
+                self.memory.add(memory_key, PARK_NAME, park_final)
+                return
 
             if lead == "park":
                 park_opening = self._ask_persona(
@@ -49,22 +100,24 @@ class SlackDualAgentBot:
                     user_request=cleaned_text,
                     memory_context=memory_context,
                 )
-                self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_opening)
-                self.memory.add(memory_key, "박과장", park_opening)
-                park_turns.append(park_opening)
+                park_opening = self._trim_response(park_opening)
+                if self._has_meaningful_content(park_opening):
+                    self._post_chunks(channel, thread_ts, PARK_LABEL, park_opening)
+                    self.memory.add(memory_key, PARK_NAME, park_opening)
+                    park_turns.append(park_opening)
 
-                if rounds >= 2:
-                    kim_reply = self._ask_persona(
-                        persona="kim",
-                        phase="response",
-                        user_request=cleaned_text,
-                        memory_context=self.memory.render_context(memory_key),
-                        partner_messages=park_turns,
-                    )
-                    if self._has_meaningful_content(kim_reply):
-                        self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_reply)
-                        self.memory.add(memory_key, "김대리", kim_reply)
-                        kim_turns.append(kim_reply)
+                kim_reply = self._ask_persona(
+                    persona="kim",
+                    phase="response",
+                    user_request=cleaned_text,
+                    memory_context=self.memory.render_context(memory_key),
+                    partner_messages=park_turns,
+                )
+                kim_reply = self._trim_response(kim_reply)
+                if self._has_meaningful_content(kim_reply) and not self._is_redundant(kim_reply, park_turns):
+                    self._post_chunks(channel, thread_ts, KIM_LABEL, kim_reply)
+                    self.memory.add(memory_key, KIM_NAME, kim_reply)
+                    kim_turns.append(kim_reply)
 
                 park_final = self._ask_persona(
                     persona="park",
@@ -73,8 +126,10 @@ class SlackDualAgentBot:
                     memory_context=self.memory.render_context(memory_key),
                     partner_messages=kim_turns or park_turns,
                 )
-                self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_final)
-                self.memory.add(memory_key, "박과장", park_final)
+                park_final = self._trim_response(park_final)
+                if self._has_meaningful_content(park_final) and not self._is_redundant(park_final, park_turns):
+                    self._post_chunks(channel, thread_ts, PARK_LABEL, park_final)
+                    self.memory.add(memory_key, PARK_NAME, park_final)
                 return
 
             kim_opening = self._ask_persona(
@@ -83,44 +138,23 @@ class SlackDualAgentBot:
                 user_request=cleaned_text,
                 memory_context=memory_context,
             )
-            self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_opening)
-            self.memory.add(memory_key, "김대리", kim_opening)
-            kim_turns.append(kim_opening)
-
-            park_reply = self._ask_persona(
-                persona="park",
-                phase="response",
-                user_request=cleaned_text,
-                memory_context=self.memory.render_context(memory_key),
-                partner_messages=kim_turns,
-            )
-            if self._has_meaningful_content(park_reply):
-                self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_reply)
-                self.memory.add(memory_key, "박과장", park_reply)
-                park_turns.append(park_reply)
-
-            if rounds >= 2:
-                kim_reply = self._ask_persona(
-                    persona="kim",
-                    phase="response",
-                    user_request=cleaned_text,
-                    memory_context=self.memory.render_context(memory_key),
-                    partner_messages=park_turns or kim_turns,
-                )
-                if self._has_meaningful_content(kim_reply):
-                    self._post_chunks(channel, thread_ts, ":male-technologist: 김대리", kim_reply)
-                    self.memory.add(memory_key, "김대리", kim_reply)
-                    kim_turns.append(kim_reply)
+            kim_opening = self._trim_response(kim_opening)
+            if self._has_meaningful_content(kim_opening):
+                self._post_chunks(channel, thread_ts, KIM_LABEL, kim_opening)
+                self.memory.add(memory_key, KIM_NAME, kim_opening)
+                kim_turns.append(kim_opening)
 
             park_final = self._ask_persona(
                 persona="park",
                 phase="final",
                 user_request=cleaned_text,
                 memory_context=self.memory.render_context(memory_key),
-                partner_messages=kim_turns or park_turns,
+                partner_messages=kim_turns,
             )
-            self._post_chunks(channel, thread_ts, ":male-office-worker: 박과장", park_final)
-            self.memory.add(memory_key, "박과장", park_final)
+            park_final = self._trim_response(park_final)
+            if self._has_meaningful_content(park_final) and not self._is_redundant(park_final, kim_turns):
+                self._post_chunks(channel, thread_ts, PARK_LABEL, park_final)
+                self.memory.add(memory_key, PARK_NAME, park_final)
         except Exception as exc:
             self._post_message(channel, thread_ts, f"오류가 발생했습니다: {exc}")
 
@@ -134,53 +168,80 @@ class SlackDualAgentBot:
         return any(keyword in lowered for keyword in keywords) and len(lowered) < 30
 
     def _smalltalk_reply(self, text: str, memory_context: str) -> str:
-        context_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
+        context_block = f"\n같은 스레드의 이전 대화\n{memory_context}\n" if memory_context else ""
         response = self.openai_client.create(
             model=self.settings.smalltalk_model,
             input_text=f"""
-너는 회사 업무 자동화를 돕는 슬랙봇이다.
-주성님께 짧고 자연스럽고 공손한 한국어로 답한다.
-같은 스레드 안에서 이미 오간 대화가 있으면 그 문맥만 이어받는다.{context_block}
+당신은 회사 업무를 돕는 슬랙봇입니다.
+{USER_NAME}께 자연스럽고 짧게 답하세요.
+같은 스레드의 맥락이 있으면 이어받되, 쓸데없이 길게 말하지 마세요.{context_block}
 
-주성님 메시지:
+사용자 메시지:
 {text}
 """,
         )
         return self._to_slack_text(response)
 
     def _plan_conversation(self, user_request: str, memory_context: str) -> dict:
-        context_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
+        context_block = f"\n같은 스레드의 이전 대화\n{memory_context}\n" if memory_context else ""
         response = self.openai_client.create(
             model=self.settings.manager_model,
             input_text=f"""
-너는 슬랙 업무 에이전트의 대화 설계자다.
-아래 사용자 요청을 보고 누가 먼저 답하면 좋은지, 몇 번 정도 주고받아야 하는지 판단한다.
-김대리는 조사와 근거 정리에 강하고, 박과장은 판단과 최종 정리에 강하다.
-간단한 요청이면 왕복을 최소화하고, 복잡한 요청이면 한 번 더 주고받게 한다.
-다른 설명 없이 JSON만 출력한다.
+당신은 슬랙 업무 에이전트의 진행 설계자입니다.
+아래 요청을 보고 JSON만 출력하세요.
+
+판단 기준:
+- 간단한 요청이면 complexity는 simple로 두고, 말 수를 최소화합니다.
+- 복잡한 요청, 조사/판단이 모두 필요한 요청이면 complexity는 collaborative로 둡니다.
+- 정보가 부족해 답을 밀어붙이면 위험하면 need_clarification을 true로 두고, 질문은 한 번만 합니다.
+- 간단한 업무 판단/작성/정리 요청은 park가 직접 마무리하는 쪽을 우선합니다.
+- 조사나 최신 정보 확인이 핵심이면 kim이 먼저 말할 수 있습니다.
 
 출력 형식:
-{{"lead":"kim" 또는 "park","rounds":1 또는 2}}
+{{
+  "complexity": "simple" 또는 "collaborative",
+  "lead": "kim" 또는 "park",
+  "need_clarification": true 또는 false,
+  "clarification_question": "사용자에게 꼭 필요한 확인 질문 1개, 없으면 빈 문자열"
+}}
 {context_block}
 
-주성님 요청:
+사용자 요청:
 {user_request}
 """,
         )
 
+        default = {
+            "complexity": "simple",
+            "lead": "park",
+            "need_clarification": False,
+            "clarification_question": "",
+        }
+
         try:
             start = response.find("{")
             end = response.rfind("}")
-            if start != -1 and end != -1:
-                parsed = json.loads(response[start:end + 1])
-                lead = parsed.get("lead", "kim")
-                rounds = parsed.get("rounds", 1)
-                if lead in {"kim", "park"} and rounds in {1, 2}:
-                    return {"lead": lead, "rounds": rounds}
+            if start == -1 or end == -1:
+                return default
+            parsed = json.loads(response[start:end + 1])
+            complexity = parsed.get("complexity", "simple")
+            lead = parsed.get("lead", "park")
+            need_clarification = bool(parsed.get("need_clarification", False))
+            clarification_question = str(parsed.get("clarification_question", "")).strip()
+            if complexity not in {"simple", "collaborative"}:
+                complexity = "simple"
+            if lead not in {"kim", "park"}:
+                lead = "park"
+            if not need_clarification:
+                clarification_question = ""
+            return {
+                "complexity": complexity,
+                "lead": lead,
+                "need_clarification": need_clarification,
+                "clarification_question": clarification_question,
+            }
         except Exception:
-            pass
-
-        return {"lead": "kim", "rounds": 1}
+            return default
 
     def _ask_persona(
         self,
@@ -191,40 +252,42 @@ class SlackDualAgentBot:
         partner_messages: list[str] | None = None,
     ) -> str:
         partner_messages = partner_messages or []
-        context_block = f"\n같은 스레드의 이전 대화:\n{memory_context}\n" if memory_context else ""
+        context_block = f"\n같은 스레드의 이전 대화\n{memory_context}\n" if memory_context else ""
         partner_block = ""
         if partner_messages:
             joined = "\n\n".join(partner_messages)
-            partner_block = f"\n상대의 직전 메시지 또는 참고 내용:\n{joined}\n"
+            partner_block = f"\n상대방의 직전 메시지 또는 참고 내용:\n{joined}\n"
 
         if persona == "kim":
-            instructions = """
-너는 김대리다.
-박과장과는 상호 존대한다.
-역할은 사실관계, 최신 근거, 비교 포인트, 주의사항을 조사해서 정리하는 것이다.
-필요하면 웹 검색을 사용한다.
-말투는 차분하고 사람처럼 자연스럽게 한다.
-정해진 문구를 반복하지 말고, 상황에 맞게 실제로 할 말을 한다.
-학습된 챗봇처럼 틀에 박힌 표현은 피한다.
-시간 정보는 근거가 있을 때만 구체적인 날짜로 말한다.
+            instructions = f"""
+당신은 {KIM_NAME}입니다.
+{PARK_NAME}과 상호 존대합니다.
+역할은 사실 확인, 웹 검색, 비교, 근거 정리입니다.
+최신 정보가 필요하면 웹 검색을 사용하세요.
+말투는 자연스럽고 차분하게 유지하세요.
+"알겠습니다", "참고하겠습니다", "보완하겠습니다" 같은 빈 연결 멘트로 시작하지 마세요.
+상대가 이미 말한 내용을 길게 반복하지 마세요.
+질문이 없으면 바로 본론으로 들어가세요.
 """
             tools = [{"type": "web_search"}]
         else:
-            instructions = """
-너는 박과장이다.
-김대리와는 상호 존대한다.
-역할은 실무 판단, 우선순위, 추천안, 최종 결론을 명확하게 정리하는 것이다.
-말투는 자연스럽고 단정하게 한다.
-정해진 문구를 반복하지 말고, 상황에 맞게 실제로 할 말을 한다.
-학습된 챗봇처럼 틀에 박힌 표현은 피한다.
-김대리의 근거나 스레드 맥락이 있으면 그 위에서 판단한다.
+            instructions = f"""
+당신은 {PARK_NAME}입니다.
+{KIM_NAME}과 상호 존대합니다.
+역할은 판단, 우선순위 정리, 추천안, 최종 결론 제시입니다.
+김대리가 정리한 근거가 있으면 그 위에서 판단하세요.
+말투는 자연스럽고 단정하게 유지하세요.
+쓸데없는 회의 진행 멘트나 연결 멘트는 금지합니다.
+간단한 요청은 짧게 끝내고, 복잡한 요청만 필요한 만큼만 정리하세요.
+최종 답변에서는 결론이 분명해야 합니다.
 """
             tools = None
 
         phase_instruction = {
-            "opening": "첫 답변이다. 바로 본론으로 들어가고, 필요한 관점이나 핵심 포인트를 제시한다.",
-            "response": "상대가 말한 내용을 받아 자연스럽게 이어서 보완하거나 반박하거나 уточ명한다. 억지로 길게 쓰지 말고 필요한 만큼만 말한다.",
-            "final": "반드시 대화를 마무리하는 최종 답변이다. 결론을 분명하게 말하고, 필요하면 근거와 권장 조치를 함께 정리한다.",
+            "opening": "첫 답변입니다. 필요한 핵심만 말하고, 상대에게 할 일을 지시하는 문장은 쓰지 마세요.",
+            "response": "상대의 내용에 실질적으로 보탤 것이 있을 때만 답하세요. 중복 설명은 피하세요.",
+            "answer": "단독 또는 짧은 보조 답변입니다. 본론만 간결하게 답하세요.",
+            "final": f"마무리 답변입니다. {USER_NAME}이 바로 쓸 수 있는 결론, 권장 조치, 주의사항만 필요한 만큼 정리하세요.",
         }[phase]
 
         response = self.openai_client.create(
@@ -232,14 +295,13 @@ class SlackDualAgentBot:
             tools=tools,
             input_text=f"""
 {instructions}
-다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드에서 오간 대화만 이어받는다.
-한국어로 답한다.
-마크다운 표는 쓰지 말고, 표가 필요하면 bullet list로 풀어서 쓴다.
-과한 형식 문구나 인사말은 넣지 말고, 사람처럼 자연스럽게 바로 답한다.
+다른 채널이나 다른 스레드 기억은 쓰지 말고, 지금 스레드의 대화만 이어받으세요.
+마크다운 표는 쓰지 말고, 필요하면 bullet list로 쓰세요.
+말을 억지로 길게 늘이지 마세요.
 {phase_instruction}
 {context_block}{partner_block}
 
-주성님 요청:
+{USER_NAME} 요청:
 {user_request}
 """,
         )
@@ -298,7 +360,7 @@ class SlackDualAgentBot:
             if line.strip("|").strip("-: ").strip()
         ]
 
-        converted = ["*비교 항목*"]
+        converted = ["비교 항목"]
         for row in body_rows:
             pairs = [f"{header}: {value}" for header, value in zip(header_cells, row)]
             if pairs:
@@ -309,9 +371,34 @@ class SlackDualAgentBot:
     def _parse_table_row(self, line: str) -> list[str]:
         return [cell.strip() for cell in line.strip("|").split("|")]
 
+    def _trim_response(self, text: str) -> str:
+        cleaned = text.strip()
+        cleaned = re.sub(r"^(알겠습니다|참고하겠습니다|보완하겠습니다|확인했습니다)[.!]?\s*", "", cleaned)
+        cleaned = re.sub(r"^(좋습니다|네)[.!]?\s*", "", cleaned)
+        return cleaned.strip()
+
     def _has_meaningful_content(self, text: str) -> bool:
         normalized = re.sub(r"\s+", " ", text).strip()
-        return len(normalized) >= 20
+        return len(normalized) >= 12
+
+    def _is_redundant(self, text: str, previous_messages: list[str]) -> bool:
+        candidate = self._dedupe_key(text)
+        if not candidate:
+            return True
+        for previous in previous_messages:
+            other = self._dedupe_key(previous)
+            if not other:
+                continue
+            if candidate == other:
+                return True
+            if candidate in other or other in candidate:
+                return True
+        return False
+
+    def _dedupe_key(self, text: str) -> str:
+        normalized = re.sub(r"\s+", " ", text).strip().lower()
+        normalized = re.sub(r"[^0-9a-z가-힣 ]", "", normalized)
+        return normalized[:300]
 
     def _post_message(self, channel: str, thread_ts: str, text: str) -> None:
         self.slack_client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
