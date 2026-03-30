@@ -54,6 +54,11 @@ class SlackDualAgentBot:
             mode = plan.get("mode", "solo_park")
             if self._wants_links_or_images(cleaned_text):
                 mode = "kim_then_park"
+            preferred_speaker = self._preferred_speaker(cleaned_text)
+            if preferred_speaker == "kim":
+                mode = "kim_then_park"
+            elif preferred_speaker == "park":
+                mode = "solo_park"
 
             if mode == "solo_park":
                 park_final = self._ask_park(
@@ -161,6 +166,13 @@ class SlackDualAgentBot:
             "\ucc3e\uc544\uc918",
         ]
         return any(keyword in lowered for keyword in keywords)
+
+    def _preferred_speaker(self, text: str) -> str | None:
+        if KIM_NAME in text:
+            return "kim"
+        if PARK_NAME in text:
+            return "park"
+        return None
 
     def _is_smalltalk(self, text: str) -> bool:
         lowered = text.lower()
