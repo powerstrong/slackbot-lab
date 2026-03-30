@@ -15,9 +15,9 @@ class Settings:
     slack_app_token: str | None = None
     host: str = "0.0.0.0"
     port: int = 3000
-    research_model: str = "gpt-4.1"
-    manager_model: str = "gpt-4.1-mini"
-    smalltalk_model: str = "gpt-4.1-mini"
+    research_model: str = "gpt-5.2"
+    manager_model: str = "gpt-5.2"
+    smalltalk_model: str = "gpt-5-mini"
     memory_db_path: str = "data/conversation_memory.db"
 
     @classmethod
@@ -50,8 +50,8 @@ class Settings:
             slack_app_token=slack_app_token,
             host=os.getenv("HOST", "0.0.0.0").strip(),
             port=int(os.getenv("PORT", "3000").strip()),
-            research_model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-4.1").strip(),
-            manager_model=os.getenv("OPENAI_MANAGER_MODEL", "gpt-4.1-mini").strip(),
-            smalltalk_model=os.getenv("OPENAI_SMALLTALK_MODEL", "gpt-4.1-mini").strip(),
+            research_model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.2").strip(),
+            manager_model=os.getenv("OPENAI_MANAGER_MODEL", "gpt-5.2").strip(),
+            smalltalk_model=os.getenv("OPENAI_SMALLTALK_MODEL", "gpt-5-mini").strip(),
             memory_db_path=os.getenv("MEMORY_DB_PATH", "data/conversation_memory.db").strip(),
         )
